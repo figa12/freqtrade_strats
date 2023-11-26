@@ -15,22 +15,41 @@ from functools import reduce
 from freqtrade.persistence import Trade, LocalTrade
 from datetime import datetime, timedelta
 import time
-from typing import Optional
+from typing import Optional, Union
 import warnings
 
 class ZVWAPLBStrategy(IStrategy):
     # Define hyperparameters
-    minimal_roi = {"0": 0.01}
-    stoploss = -0.03
-    timeframe = '1h'
+    minimal_roi = {"0": 100.0}
+    stoploss = -0.99
+    timeframe = '5m'
+    can_short: bool = False
+
+    # Define strategy parameters
+    strategy_params = {
+        'length': 23,
+        'lowerBottom': -1,
+        'sellLine': 1.0,
+        'stopLoss': 5,
+        'rsi_length': 9,
+        'rsi_sma_length': 14
+    }
 
     def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # Calculate ZVWAP
-        dataframe['zvwap'] = self.calc_zvwap(dataframe, length=self.params['length'])
+        dataframe['zvwap'] = self.calc_zvwap(dataframe, length=self.strategy_params['length'])
 
-        # Calculate EMA values
-        dataframe['long_ema'] = ta.EMA(dataframe['close'], timeperiod=self.params['slowEma'])
-        dataframe['short_ema'] = ta.EMA(dataframe['close'], timeperiod=self.params['fastEma'])
+        # RSI
+        dataframe['rsiValue'] = ta.RSI(dataframe['close'], timeperiod=self.strategy_params['rsi_length'])
+        dataframe['rsi_sma'] = ta.SMA(dataframe['rsiValue'], timeperiod=self.strategy_params['rsi_sma_length'])
+
+        # EMA
+        dataframe['ema_12'] = ta.EMA(dataframe, timeperiod=12)
+        dataframe['ema_16'] = ta.EMA(dataframe, timeperiod=16)
+        dataframe['ema_26'] = ta.EMA(dataframe, timeperiod=26)
+        dataframe['ema_50'] = ta.EMA(dataframe, timeperiod=50)
+        dataframe['ema_100'] = ta.EMA(dataframe, timeperiod=100)
+        dataframe['ema_200'] = ta.EMA(dataframe, timeperiod=200)
 
         return dataframe
 
@@ -39,11 +58,32 @@ class ZVWAPLBStrategy(IStrategy):
 
         var_pow = (dataframe['close'] - mean).pow(2)
         var_sma = ta.SMA(var_pow, timeperiod=length)
-        var_sqrt = np.sqrt(var_sma)
-        vwapsd = var_sqrt
+        vwapsd = np.sqrt(var_sma)
         
         #vwapsd = np.sqrt(dataframe['close'] - mean).pow(2).rolling(window=length)
         return (dataframe['close'] - mean) / vwapsd
+
+    def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe.loc[
+            (
+                (qtpylib.crossed_above(dataframe['zvwap'], self.strategy_params['lowerBottom'])) &
+                (dataframe['close'] > dataframe["ema_100"]) &
+                (dataframe['rsiValue'] > dataframe['rsi_sma'])
+            ),
+            'enter_long'] = 1
+
+        return dataframe
+    def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+        dataframe.loc[
+            (
+                (qtpylib.crossed_below(dataframe['rsiValue'], 80)) |
+                ((dataframe['zvwap'] > 1.1) & (dataframe['rsiValue'] > 60))
+            ),
+            'exit_long'] = 1
+
+        return dataframe
+
+"""
 
     def populate_buy_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # Identify ZVWAP dips
@@ -52,6 +92,7 @@ class ZVWAPLBStrategy(IStrategy):
         # Generate buy signals
         dataframe.loc[zvwap_dipped, 'buy_signal'] = 1
         return dataframe
+
 
     def populate_sell_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
         # Generate sell signals
@@ -84,19 +125,5 @@ class ZVWAPLBStrategy(IStrategy):
         # Add sell conditions here based on your original script
 
         return dataframe
-
-# Instantiate the strategy
-strategy = ZVWAPLBStrategy()
-
-# Define strategy parameters
-strategy_params = {
-    'length': 13,
-    'buyLine': -0.5,
-    'sellLine': 2.0,
-    'fastEma': 13,
-    'slowEma': 55,
-    'stopLoss': 5
-}
-
-# Set strategy parameters
-strategy.init_params(strategy_params)
+        
+"""
